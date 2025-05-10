@@ -545,24 +545,44 @@ async def main():
         subprocess.check_call(['pip', 'install', 'python-telegram-bot'])
         from telegram import Bot
 
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_GROUP_ID":
-        print("⚠️ ERROR: Please set your Telegram bot token and group ID in the script!")
-        print("Get your bot token from @BotFather and add the bot to your group with admin privileges")
+    # Check configuration
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
+        print("⚠️ ERROR: Please set your Telegram bot token in the script!")
+        print("Get your bot token from @BotFather")
         return
 
-    # Update the chat ID
-    TELEGRAM_CHAT_ID = get_chat_id()
+    if not TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID == "YOUR_GROUP_ID":
+        print("⚠️ ERROR: Please set your Telegram group ID in the script!")
+        print("Add the bot to your group with admin privileges")
+        return
 
-    # Run the scraper
-    telegram_messages = scrape_free_courses()
-    
-    # Send messages to Telegram
-    if telegram_messages:
-        print(f"\nSending {len(telegram_messages)} messages to Telegram group...")
-        await run_telegram_operations(telegram_messages)
-    else:
-        print("No courses found to send.")
+    try:
+        # Update the chat ID
+        TELEGRAM_CHAT_ID = get_chat_id()
+
+        # Run the scraper
+        print("Starting course scraping...")
+        telegram_messages = scrape_free_courses()
+        
+        # Send messages to Telegram
+        if telegram_messages:
+            print(f"\nSending {len(telegram_messages)} messages to Telegram group...")
+            await run_telegram_operations(telegram_messages)
+        else:
+            print("No courses found to send.")
+            
+    except Exception as e:
+        print(f"❌ Error during execution: {e}")
+        print("Please check your configuration and try again.")
 
 # Update the main execution block
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nScript interrupted by user")
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        print("Please check your configuration and try again.")
