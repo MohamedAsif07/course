@@ -143,29 +143,42 @@ def extract_coupon_code(driver, url):
 
 def get_udemy_link_with_coupon(driver):
     try:
-        # Find the APPLY HERE button
-        apply_button = driver.find_element(By.XPATH, "//a[contains(text(), 'APPLY HERE')]")
+        # Try multiple selectors for the APPLY HERE button
+        selectors = [
+            "//a[contains(text(), 'APPLY HERE')]",
+            "//a[contains(@class, 'wp-block-button__link')]",
+            "//a[contains(@class, 'button')]",
+            "//a[contains(@href, 'udemy.com')]",
+            "//a[contains(@class, 'has-luminous-vivid-amber')]"
+        ]
         
-        # Get the href attribute which contains the Udemy link with coupon
-        udemy_link = apply_button.get_attribute("href")
+        for selector in selectors:
+            try:
+                print(f"Trying selector: {selector}")
+                element = driver.find_element(By.XPATH, selector)
+                udemy_link = element.get_attribute("href")
+                
+                if udemy_link and 'udemy.com' in udemy_link:
+                    print(f"Found Udemy link: {udemy_link}")
+                    return udemy_link
+            except Exception as e:
+                print(f"Selector {selector} failed: {str(e)}")
+                continue
         
-        if udemy_link and 'udemy.com' in udemy_link:
-            print(f"Found Udemy link: {udemy_link}")
-            return udemy_link
-            
-    except Exception as e:
-        print(f"Error finding APPLY HERE button: {e}")
-        
-        # Fallback: Try to find any Udemy link with coupon
-        try:
-            links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in links:
+        # If no button found, try to find any Udemy link with coupon
+        print("Trying to find any Udemy link with coupon...")
+        links = driver.find_elements(By.TAG_NAME, 'a')
+        for link in links:
+            try:
                 href = link.get_attribute('href')
                 if href and 'udemy.com' in href and 'couponCode=' in href:
                     print(f"Found Udemy link with coupon: {href}")
                     return href
-        except Exception as e:
-            print(f"Error finding Udemy link: {e}")
+            except:
+                continue
+                
+    except Exception as e:
+        print(f"Error in get_udemy_link_with_coupon: {e}")
     
     return None
 
@@ -208,7 +221,21 @@ async def run_telegram_operations(messages_with_images):
 
     print(f"Messages sent: {success_count}, Failed: {failure_count}")
 
-# Main scraping function
+def get_course_description(driver):
+    try:
+        desc_elements = driver.find_elements(By.CSS_SELECTOR, ".td-post-content p")
+        for i, p in enumerate(desc_elements):
+            if i < 3:  # Only get first 3 paragraphs
+                text = p.text.strip()
+                if text and len(text) > 20:  # Only meaningful paragraphs
+                    # Trim to reasonable length
+                    if len(text) > 200:
+                        text = text[:197] + "..."
+                    return f"📝 <i>{text}</i>\n\n"
+    except Exception as e:
+        print(f"Error getting course description: {e}")
+    return ""
+
 def scrape_free_courses():
     # Create default image for fallback
     create_default_image()
@@ -322,17 +349,27 @@ def scrape_free_courses():
                 return
 
             # Process each course
+            successful_courses = 0
             for i, (title, link, img_url) in enumerate(zip(course_titles, course_links, image_urls)):
                 try:
                     # Visit course page
+                    print(f"\nProcessing course: {title}")
                     driver.get(link)
                     time.sleep(DELAY_SECONDS)
 
                     # Get Udemy link with coupon
                     udemy_link = get_udemy_link_with_coupon(driver)
                     
+                    if not udemy_link:
+                        print(f"Could not find Udemy link for course: {title}")
+                        continue
+                    
                     # Extract coupon code from Udemy link
                     coupon_code = extract_coupon_code(driver, udemy_link)
+                    coupon_text = f"🎟️ <b>Coupon Code:</b> <code>{coupon_code}</code>\n" if coupon_code else ""
+
+                    # Get course description
+                    description = get_course_description(driver)
 
                     # Download image if available
                     image_path = None
@@ -347,20 +384,31 @@ def scrape_free_courses():
                             print(f"Error downloading image: {e}")
                             image_path = DEFAULT_IMAGE_PATH
 
-                    # Format message
-                    message = f"🎓 <b>{title}</b>\n\n"
-                    if coupon_code:
-                        message += f"🎟️ Coupon Code: <code>{coupon_code}</code>\n\n"
-                    if udemy_link:
-                        message += f"🔗 <a href='{udemy_link}'>Get Course</a>"
-                    else:
-                        message += f"🔗 <a href='{link}'>View Course</a>"
+                    # Format message for Telegram
+                    message = (
+                        f"🔥 <b>{title}</b>\n\n"
+                        f"{description}"
+                        f"🌐 <a href='{udemy_link}'>Enroll Now (Free)</a>\n"
+                        f"{coupon_text}"
+                        f"📢 Share with friends who want to learn!\n\n"
+                        f"#FreeCourse #Udemy #OnlineLearning"
+                    )
 
                     telegram_messages.append((message, image_path))
+                    successful_courses += 1
+                    print(f"✅ Course processed successfully")
 
                 except Exception as e:
-                    print(f"Error processing course {title}: {e}")
+                    print(f"❌ Error processing course: {e}")
                     continue
+
+            # Final summary message
+            if successful_courses > 0:
+                summary = f"✅ <b>Today's Free Courses Update</b>\n\nJust shared {successful_courses} free Udemy courses! Grab them while they last.\n\n#FreeUdemy #CourseUpdate"
+                telegram_messages.append((summary, None))
+            else:
+                error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
+                telegram_messages.append((error_message, None))
 
         except Exception as e:
             print(f"❌ Error during scraping: {e}")
@@ -369,7 +417,7 @@ def scrape_free_courses():
 
     except Exception as e:
         print(f"❌ Error during scraping: {e}")
-        error_message = f"⚠️ <b>Unexpected Error</b>\n\nAn unexpected error occurred. Please try again later."
+        error_message = f"⚠️ <b>Error During Scraping</b>\n\nAn error occurred while scraping courses. Please try again later."
         telegram_messages.append((error_message, None))
     finally:
         driver.quit()
