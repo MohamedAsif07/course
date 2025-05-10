@@ -531,28 +531,38 @@ def get_chat_id():
     # Otherwise, assume it's already a chat ID
     return TELEGRAM_CHAT_ID
 
-# Main execution
-if __name__ == "__main__":
-    print("Starting Free Udemy Course Telegram Bot...")
+# Add this at the end of the file, just before the if __name__ == "__main__" block
 
+async def main():
+    print("Starting Free Udemy Course Telegram Bot...")
+    
     # Check if Python Telegram Bot is installed
     try:
         from telegram import Bot
     except ImportError:
         print("Installing python-telegram-bot...")
         import subprocess
-
         subprocess.check_call(['pip', 'install', 'python-telegram-bot'])
-        # Re-import
         from telegram import Bot
 
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_GROUP_ID":
         print("⚠️ ERROR: Please set your Telegram bot token and group ID in the script!")
         print("Get your bot token from @BotFather and add the bot to your group with admin privileges")
-        exit(1)
+        return
 
     # Update the chat ID
     TELEGRAM_CHAT_ID = get_chat_id()
 
     # Run the scraper
-    scrape_free_courses()
+    telegram_messages = scrape_free_courses()
+    
+    # Send messages to Telegram
+    if telegram_messages:
+        print(f"\nSending {len(telegram_messages)} messages to Telegram group...")
+        await run_telegram_operations(telegram_messages)
+    else:
+        print("No courses found to send.")
+
+# Update the main execution block
+if __name__ == "__main__":
+    asyncio.run(main())
