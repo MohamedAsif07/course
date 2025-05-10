@@ -134,7 +134,20 @@ def extract_coupon_code(driver, url):
         if url_match:
             return url_match.group(1)
 
-    # If not in URL, try to find on page
+    # Try to find and click the APPLY HERE button
+    try:
+        apply_button = driver.find_element(By.XPATH, "//a[contains(text(), 'APPLY HERE')]")
+        udemy_link = apply_button.get_attribute("href")
+        
+        # Extract coupon from Udemy link
+        for pattern in coupon_patterns:
+            match = re.search(pattern, udemy_link, re.IGNORECASE)
+            if match:
+                return match.group(1)
+    except:
+        pass
+
+    # If not found in button, try to find on page
     try:
         # Look for elements that might contain coupon info
         potential_texts = []
@@ -170,6 +183,23 @@ def extract_coupon_code(driver, url):
     except:
         pass
 
+    return None
+
+def get_udemy_link(driver):
+    try:
+        # Try to find the APPLY HERE button
+        apply_button = driver.find_element(By.XPATH, "//a[contains(text(), 'APPLY HERE')]")
+        return apply_button.get_attribute("href")
+    except:
+        # If APPLY HERE button not found, try to find any Udemy link
+        try:
+            links = driver.find_elements(By.TAG_NAME, 'a')
+            for link in links:
+                href = link.get_attribute('href')
+                if href and 'udemy.com' in href:
+                    return href
+        except:
+            pass
     return None
 
 # Function to test Telegram connection
@@ -331,8 +361,11 @@ def scrape_free_courses():
                     driver.get(link)
                     time.sleep(DELAY_SECONDS)
 
+                    # Get Udemy link
+                    udemy_link = get_udemy_link(driver)
+                    
                     # Extract coupon code
-                    coupon_code = extract_coupon_code(driver, link)
+                    coupon_code = extract_coupon_code(driver, udemy_link if udemy_link else link)
 
                     # Download image if available
                     image_path = None
@@ -351,7 +384,10 @@ def scrape_free_courses():
                     message = f"🎓 <b>{title}</b>\n\n"
                     if coupon_code:
                         message += f"🎟️ Coupon Code: <code>{coupon_code}</code>\n\n"
-                    message += f"🔗 <a href='{link}'>Get Course</a>"
+                    if udemy_link:
+                        message += f"🔗 <a href='{udemy_link}'>Get Course</a>"
+                    else:
+                        message += f"🔗 <a href='{link}'>View Course</a>"
 
                     telegram_messages.append((message, image_path))
 
