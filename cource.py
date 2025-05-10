@@ -123,83 +123,50 @@ async def send_to_telegram_group(message, image_path=None):
 
 # Extract coupon code from URL or page
 def extract_coupon_code(driver, url):
-    # Try to extract from URL first
+    if not url:
+        return None
+        
+    # Extract coupon code from URL
     coupon_patterns = [
         r'couponCode=([A-Z0-9]+)',
         r'coupon=([A-Z0-9]+)'
     ]
 
     for pattern in coupon_patterns:
-        url_match = re.search(pattern, url, re.IGNORECASE)
-        if url_match:
-            return url_match.group(1)
-
-    # Try to find and click the APPLY HERE button
-    try:
-        apply_button = driver.find_element(By.XPATH, "//a[contains(text(), 'APPLY HERE')]")
-        udemy_link = apply_button.get_attribute("href")
-        
-        # Extract coupon from Udemy link
-        for pattern in coupon_patterns:
-            match = re.search(pattern, udemy_link, re.IGNORECASE)
-            if match:
-                return match.group(1)
-    except:
-        pass
-
-    # If not found in button, try to find on page
-    try:
-        # Look for elements that might contain coupon info
-        potential_texts = []
-
-        # Method 1: Look for elements with "coupon" text
-        coupon_elements = driver.find_elements(By.XPATH,
-                                               "//*[contains(text(), 'coupon') or contains(text(), 'COUPON') or contains(text(), 'Coupon') or contains(text(), 'code') or contains(text(), 'CODE')]")
-
-        for element in coupon_elements:
-            try:
-                text = element.text.strip()
-                if text:
-                    potential_texts.append(text)
-                    # Also check parent element
-                    parent = element.find_element(By.XPATH, "./..")
-                    parent_text = parent.text.strip()
-                    if parent_text and parent_text != text:
-                        potential_texts.append(parent_text)
-            except:
-                continue
-
-        # Process all potential texts
-        for text in potential_texts:
-            # Look for patterns like "CODE: ABCDEF" or "Coupon: ABCDEF"
-            pattern_matches = re.search(r'(?:code|coupon)[:\s]+([A-Z0-9]{5,})', text, re.IGNORECASE)
-            if pattern_matches:
-                return pattern_matches.group(1)
-
-            # Otherwise look for any sequence that looks like a coupon code
-            code_match = re.search(r'[A-Z0-9]{5,}', text)
-            if code_match:
-                return code_match.group(0)
-    except:
-        pass
+        match = re.search(pattern, url, re.IGNORECASE)
+        if match:
+            coupon_code = match.group(1)
+            print(f"Found coupon code: {coupon_code}")
+            return coupon_code
 
     return None
 
-def get_udemy_link(driver):
+def get_udemy_link_with_coupon(driver):
     try:
-        # Try to find the APPLY HERE button
+        # Find the APPLY HERE button
         apply_button = driver.find_element(By.XPATH, "//a[contains(text(), 'APPLY HERE')]")
-        return apply_button.get_attribute("href")
-    except:
-        # If APPLY HERE button not found, try to find any Udemy link
+        
+        # Get the href attribute which contains the Udemy link with coupon
+        udemy_link = apply_button.get_attribute("href")
+        
+        if udemy_link and 'udemy.com' in udemy_link:
+            print(f"Found Udemy link: {udemy_link}")
+            return udemy_link
+            
+    except Exception as e:
+        print(f"Error finding APPLY HERE button: {e}")
+        
+        # Fallback: Try to find any Udemy link with coupon
         try:
             links = driver.find_elements(By.TAG_NAME, 'a')
             for link in links:
                 href = link.get_attribute('href')
-                if href and 'udemy.com' in href:
+                if href and 'udemy.com' in href and 'couponCode=' in href:
+                    print(f"Found Udemy link with coupon: {href}")
                     return href
-        except:
-            pass
+        except Exception as e:
+            print(f"Error finding Udemy link: {e}")
+    
     return None
 
 # Function to test Telegram connection
@@ -361,11 +328,11 @@ def scrape_free_courses():
                     driver.get(link)
                     time.sleep(DELAY_SECONDS)
 
-                    # Get Udemy link
-                    udemy_link = get_udemy_link(driver)
+                    # Get Udemy link with coupon
+                    udemy_link = get_udemy_link_with_coupon(driver)
                     
-                    # Extract coupon code
-                    coupon_code = extract_coupon_code(driver, udemy_link if udemy_link else link)
+                    # Extract coupon code from Udemy link
+                    coupon_code = extract_coupon_code(driver, udemy_link)
 
                     # Download image if available
                     image_path = None
