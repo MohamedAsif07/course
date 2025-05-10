@@ -13,6 +13,8 @@ import asyncio
 from telegram import Bot
 from telegram.error import TelegramError
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 # ======== CONFIGURATION ========
 # Telegram settings - REPLACE WITH YOUR VALUES
@@ -21,9 +23,12 @@ TELEGRAM_CHAT_ID = "-1002552787335"  # Replace with your group's numerical ID (n
 
 # Chrome driver settings
 RUN_HEADLESS = True  # Set to False if you want to see the browser window
-DELAY_SECONDS = 3  # Delay between page loads
+DELAY_SECONDS = 2  # Delay between page loads
 SAVE_IMAGES_LOCALLY = True  # Set to False if you don't want to save images locally
 DEFAULT_IMAGE_PATH = "default_course_image.jpg"  # Path to a default course image if download fails
+MAX_WORKERS = 3  # Number of parallel threads
+MAX_RETRIES = 2  # Maximum number of retries for failed operations
+PAGE_LOAD_TIMEOUT = 15  # Reduced from 30 to 15 seconds
 # ==============================
 
 # Set up browser for GitHub Actions or local use
@@ -301,22 +306,84 @@ def get_course_description(driver):
         print(f"Error getting course description: {e}")
     return ""
 
+def process_course(args):
+    """Process a single course in a separate thread"""
+    title, link, img_url, index = args
+    driver = None
+    try:
+        # Create a new driver instance for this thread
+        options = Options()
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        options.add_argument('--headless')  # Run in headless mode for speed
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+
+        print(f"\nProcessing course: {title}")
+        driver.get(link)
+        time.sleep(DELAY_SECONDS)
+
+        # Get Udemy link with coupon
+        udemy_link = get_udemy_link_with_coupon(driver)
+        if not udemy_link:
+            print(f"Could not find Udemy link for course: {title}")
+            return None
+
+        # Extract coupon code
+        coupon_code = extract_coupon_code(driver, udemy_link)
+        coupon_text = f"🎟️ <b>Coupon Code:</b> <code>{coupon_code}</code>\n" if coupon_code else ""
+
+        # Get course description
+        description = get_course_description(driver)
+
+        # Download image if available
+        image_path = None
+        if img_url and not is_data_url(img_url):
+            try:
+                response = requests.get(img_url, timeout=5)  # Reduced timeout
+                if response.status_code == 200:
+                    image_path = f"course_images/course_{index}.jpg"
+                    with open(image_path, 'wb') as f:
+                        f.write(response.content)
+            except Exception as e:
+                print(f"Error downloading image: {e}")
+                image_path = DEFAULT_IMAGE_PATH
+
+        # Format message for Telegram
+        message = (
+            f"🔥 <b>{title}</b>\n\n"
+            f"{description}"
+            f"🌐 <a href='{udemy_link}'>Enroll Now (Free)</a>\n"
+            f"{coupon_text}"
+            f"📢 Share with friends who want to learn!\n\n"
+            f"#FreeCourse #Udemy #OnlineLearning"
+        )
+
+        print(f"✅ Course processed successfully: {title}")
+        return (message, image_path)
+
+    except Exception as e:
+        print(f"❌ Error processing course {title}: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
+
 def scrape_free_courses():
     # Create default image for fallback
     create_default_image()
 
-    # Initialize WebDriver
+    # Initialize main WebDriver
     try:
         print("Initializing Chrome WebDriver...")
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     except Exception as e:
         print(f"❌ WebDriver initialization failed: {e}")
         raise
 
-    # For storing messages to send to Telegram
     telegram_messages = []
 
     try:
@@ -335,149 +402,55 @@ def scrape_free_courses():
 
         # Get current date for reporting
         current_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Send initial report to Telegram
         summary_message = f"🔥 <b>FREE UDEMY COURSES</b> - {current_date} 🔥\n\n<i>Finding the latest free courses for you...</i>"
         telegram_messages.append((summary_message, None))
 
-        try:
-            # Wait for the course blocks to load
-            wait = WebDriverWait(driver, 20)
-            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
-            
-            # Additional wait to ensure content is loaded
-            time.sleep(5)
+        # Find all course blocks with optimized selectors
+        blocks = driver.find_elements(By.CSS_SELECTOR, ".td-block-span6, .td_module_wrap")
+        print(f"Found {len(blocks)} course blocks")
 
-            # Find all course blocks
-            blocks = driver.find_elements(By.CLASS_NAME, "td-block-span6")
-            print(f"Found {len(blocks)} course blocks")
+        if not blocks:
+            error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
+            telegram_messages.append((error_message, None))
+            return
 
-            if not blocks:
-                print("No course blocks found. Checking page source...")
-                print("Page title:", driver.title)
-                print("Current URL:", driver.current_url)
+        # Extract course information
+        course_data = []
+        for i, block in enumerate(blocks):
+            try:
+                title_element = block.find_element(By.CSS_SELECTOR, "h3.entry-title a, h3 a, .entry-title a, a")
+                title = title_element.text.strip()
+                link = title_element.get_attribute("href")
                 
-                # Try alternative selectors
-                blocks = driver.find_elements(By.CSS_SELECTOR, ".td-block-span6, .td_module_wrap")
-                print(f"Found {len(blocks)} blocks with alternative selector")
+                img_element = block.find_element(By.CSS_SELECTOR, "img.entry-thumb, img, .entry-thumb")
+                img_url = img_element.get_attribute("src")
 
-            # Store course info
-            course_titles = []
-            course_links = []
-            image_urls = []
+                if title and link:
+                    course_data.append((title, link, img_url, i))
+                    print(f"Found course: {title}")
+            except Exception as e:
+                print(f"Error processing a course block: {e}")
+                continue
 
-            for block in blocks:
-                try:
-                    # Try multiple selectors for title and link
-                    title_element = None
-                    for selector in ["h3.entry-title a", "h3 a", ".entry-title a", "a"]:
-                        try:
-                            title_element = block.find_element(By.CSS_SELECTOR, selector)
-                            if title_element:
-                                break
-                        except:
-                            continue
+        print(f"Found {len(course_data)} courses in total")
 
-                    if not title_element:
-                        print("Could not find title element in block")
-                        continue
+        # Process courses in parallel
+        successful_courses = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            results = list(executor.map(process_course, course_data))
 
-                    title = title_element.text.strip()
-                    link = title_element.get_attribute("href")
+        # Filter out None results and add successful courses to messages
+        for result in results:
+            if result:
+                telegram_messages.append(result)
+                successful_courses += 1
 
-                    # Get course image
-                    img_url = None
-                    for img_selector in ["img.entry-thumb", "img", ".entry-thumb"]:
-                        try:
-                            img_element = block.find_element(By.CSS_SELECTOR, img_selector)
-                            img_url = img_element.get_attribute("src")
-                            if img_url:
-                                break
-                        except:
-                            continue
-
-                    if title and link:
-                        course_titles.append(title)
-                        course_links.append(link)
-                        image_urls.append(img_url)
-                        print(f"Found course: {title}")
-                except Exception as e:
-                    print(f"Error processing a course block: {e}")
-                    continue
-
-            print(f"Found {len(course_titles)} courses in total")
-
-            if not course_titles:
-                print("No courses found. Sending error message...")
-                error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
-                telegram_messages.append((error_message, None))
-                return
-
-            # Process each course
-            successful_courses = 0
-            for i, (title, link, img_url) in enumerate(zip(course_titles, course_links, image_urls)):
-                try:
-                    # Visit course page
-                    print(f"\nProcessing course: {title}")
-                    driver.get(link)
-                    time.sleep(DELAY_SECONDS)
-
-                    # Get Udemy link with coupon
-                    udemy_link = get_udemy_link_with_coupon(driver)
-                    
-                    if not udemy_link:
-                        print(f"Could not find Udemy link for course: {title}")
-                        continue
-
-                    # Extract coupon code
-                    coupon_code = extract_coupon_code(driver, udemy_link)
-                    coupon_text = f"🎟️ <b>Coupon Code:</b> <code>{coupon_code}</code>\n" if coupon_code else ""
-
-                    # Get course description
-                    description = get_course_description(driver)
-
-                    # Download image if available
-                    image_path = None
-                    if img_url and not is_data_url(img_url):
-                        try:
-                            response = requests.get(img_url, timeout=10)
-                            if response.status_code == 200:
-                                image_path = f"course_images/course_{i}.jpg"
-                                with open(image_path, 'wb') as f:
-                                    f.write(response.content)
-                        except Exception as e:
-                            print(f"Error downloading image: {e}")
-                            image_path = DEFAULT_IMAGE_PATH
-
-                    # Format message for Telegram
-                    message = (
-                        f"🔥 <b>{title}</b>\n\n"
-                        f"{description}"
-                        f"🌐 <a href='{udemy_link}'>Enroll Now (Free)</a>\n"
-                        f"{coupon_text}"
-                        f"📢 Share with friends who want to learn!\n\n"
-                        f"#FreeCourse #Udemy #OnlineLearning"
-                    )
-
-                    telegram_messages.append((message, image_path))
-                    successful_courses += 1
-                    print(f"✅ Course processed successfully")
-
-                except Exception as e:
-                    print(f"❌ Error processing course: {e}")
-                    continue
-
-            # Final summary message
-            if successful_courses > 0:
-                summary = f"✅ <b>Today's Free Courses Update</b>\n\nJust shared {successful_courses} free Udemy courses! Grab them while they last.\n\n#FreeUdemy #CourseUpdate"
-                telegram_messages.append((summary, None))
-            else:
-                error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
-                telegram_messages.append((error_message, None))
-
-        except Exception as e:
-            print(f"❌ Error during scraping: {e}")
-            error_message = f"⚠️ <b>Error During Scraping</b>\n\nAn error occurred while scraping courses. Please try again later."
+        # Final summary message
+        if successful_courses > 0:
+            summary = f"✅ <b>Today's Free Courses Update</b>\n\nJust shared {successful_courses} free Udemy courses! Grab them while they last.\n\n#FreeUdemy #CourseUpdate"
+            telegram_messages.append((summary, None))
+        else:
+            error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
             telegram_messages.append((error_message, None))
 
     except Exception as e:
@@ -488,11 +461,7 @@ def scrape_free_courses():
         driver.quit()
         print("Browser closed.")
 
-    # Send messages to Telegram
-    if telegram_messages:
-        asyncio.run(run_telegram_operations(telegram_messages))
-    else:
-        print("No courses found to send.")
+    return telegram_messages
 
 # Helper function to extract chat ID from URL or handle
 def get_chat_id():
