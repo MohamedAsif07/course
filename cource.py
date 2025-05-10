@@ -143,40 +143,29 @@ def extract_coupon_code(driver, url):
 
 def get_udemy_link_with_coupon(driver):
     try:
-        # Try multiple selectors for the APPLY HERE button
-        selectors = [
-            "//a[contains(text(), 'APPLY HERE')]",
-            "//a[contains(@class, 'wp-block-button__link')]",
-            "//a[contains(@class, 'button')]",
-            "//a[contains(@href, 'udemy.com')]",
-            "//a[contains(@class, 'has-luminous-vivid-amber')]"
-        ]
-        
-        for selector in selectors:
-            try:
-                print(f"Trying selector: {selector}")
-                element = driver.find_element(By.XPATH, selector)
-                udemy_link = element.get_attribute("href")
-                
-                if udemy_link and 'udemy.com' in udemy_link:
-                    print(f"Found Udemy link: {udemy_link}")
-                    return udemy_link
-            except Exception as e:
-                print(f"Selector {selector} failed: {str(e)}")
-                continue
-        
-        # If no button found, try to find any Udemy link with coupon
-        print("Trying to find any Udemy link with coupon...")
-        links = driver.find_elements(By.TAG_NAME, 'a')
-        for link in links:
-            try:
+        # First try to find the APPLY HERE button with explicit wait
+        wait = WebDriverWait(driver, 10)
+        try:
+            apply_button = wait.until(
+                EC.presence_of_element_located((By.XPATH, '//a[contains(text(), "APPLY HERE")]')))
+            udemy_link = apply_button.get_attribute("href")
+            if udemy_link and 'udemy.com' in udemy_link:
+                print(f"Found Udemy link from APPLY HERE button: {udemy_link}")
+                return udemy_link
+        except:
+            print("❌ Could not find APPLY HERE button, trying alternatives...")
+
+        # Try alternative methods to find the link
+        try:
+            links = driver.find_elements(By.TAG_NAME, 'a')
+            for link in links:
                 href = link.get_attribute('href')
-                if href and 'udemy.com' in href and 'couponCode=' in href:
-                    print(f"Found Udemy link with coupon: {href}")
+                if href and 'udemy.com' in href:
+                    print(f"Found Udemy link from alternative method: {href}")
                     return href
-            except:
-                continue
-                
+        except Exception as e:
+            print(f"❌ Could not find Udemy link: {e}")
+
     except Exception as e:
         print(f"Error in get_udemy_link_with_coupon: {e}")
     
@@ -228,10 +217,11 @@ def get_course_description(driver):
             if i < 3:  # Only get first 3 paragraphs
                 text = p.text.strip()
                 if text and len(text) > 20:  # Only meaningful paragraphs
+                    description = text
                     # Trim to reasonable length
-                    if len(text) > 200:
-                        text = text[:197] + "..."
-                    return f"📝 <i>{text}</i>\n\n"
+                    if len(description) > 200:
+                        description = description[:197] + "..."
+                    return f"📝 <i>{description}</i>\n\n"
     except Exception as e:
         print(f"Error getting course description: {e}")
     return ""
@@ -363,8 +353,8 @@ def scrape_free_courses():
                     if not udemy_link:
                         print(f"Could not find Udemy link for course: {title}")
                         continue
-                    
-                    # Extract coupon code from Udemy link
+
+                    # Extract coupon code
                     coupon_code = extract_coupon_code(driver, udemy_link)
                     coupon_text = f"🎟️ <b>Coupon Code:</b> <code>{coupon_code}</code>\n" if coupon_code else ""
 
