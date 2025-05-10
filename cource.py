@@ -126,18 +126,64 @@ def extract_coupon_code(driver, url):
     if not url:
         return None
         
-    # Extract coupon code from URL
+    # Try to extract from URL first
     coupon_patterns = [
         r'couponCode=([A-Z0-9]+)',
-        r'coupon=([A-Z0-9]+)'
+        r'coupon=([A-Z0-9]+)',
+        r'code=([A-Z0-9]+)',
+        r'promo=([A-Z0-9]+)',
+        r'promocode=([A-Z0-9]+)'
     ]
 
     for pattern in coupon_patterns:
-        match = re.search(pattern, url, re.IGNORECASE)
-        if match:
-            coupon_code = match.group(1)
-            print(f"Found coupon code: {coupon_code}")
+        url_match = re.search(pattern, url, re.IGNORECASE)
+        if url_match:
+            coupon_code = url_match.group(1)
+            print(f"✅ Found coupon code in URL: {coupon_code}")
             return coupon_code
+
+    # If not in URL, try to find on page
+    try:
+        # Look for elements that might contain coupon info
+        potential_texts = []
+
+        # Method 1: Look for elements with coupon-related text
+        coupon_elements = driver.find_elements(By.XPATH,
+            "//*[contains(text(), 'coupon') or contains(text(), 'COUPON') or contains(text(), 'Coupon') or " +
+            "contains(text(), 'code') or contains(text(), 'CODE') or contains(text(), 'promo') or " +
+            "contains(text(), 'PROMO') or contains(text(), 'discount') or contains(text(), 'DISCOUNT')]")
+
+        for element in coupon_elements:
+            try:
+                text = element.text.strip()
+                if text:
+                    potential_texts.append(text)
+                    # Also check parent element
+                    parent = element.find_element(By.XPATH, "./..")
+                    parent_text = parent.text.strip()
+                    if parent_text and parent_text != text:
+                        potential_texts.append(parent_text)
+            except:
+                continue
+
+        # Process all potential texts
+        for text in potential_texts:
+            # Look for patterns like "CODE: ABCDEF" or "Coupon: ABCDEF"
+            pattern_matches = re.search(r'(?:code|coupon|promo)[:\s]+([A-Z0-9]{5,})', text, re.IGNORECASE)
+            if pattern_matches:
+                coupon_code = pattern_matches.group(1)
+                print(f"✅ Found coupon code in text: {coupon_code}")
+                return coupon_code
+
+            # Otherwise look for any sequence that looks like a coupon code
+            code_match = re.search(r'[A-Z0-9]{5,}', text)
+            if code_match:
+                coupon_code = code_match.group(0)
+                print(f"✅ Found potential coupon code: {coupon_code}")
+                return coupon_code
+
+    except Exception as e:
+        print(f"❌ Error extracting coupon code from page: {e}")
 
     return None
 
@@ -259,13 +305,13 @@ def scrape_free_courses():
     # Create default image for fallback
     create_default_image()
 
-    # Initialize WebDriver - proper way to use Chrome driver
+    # Initialize WebDriver
     try:
         print("Initializing Chrome WebDriver...")
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        driver.set_page_load_timeout(30)  # Set page load timeout
+        driver.set_page_load_timeout(30)
     except Exception as e:
         print(f"❌ WebDriver initialization failed: {e}")
         raise
@@ -296,7 +342,7 @@ def scrape_free_courses():
 
         try:
             # Wait for the course blocks to load
-            wait = WebDriverWait(driver, 20)  # Increased timeout
+            wait = WebDriverWait(driver, 20)
             wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
             
             # Additional wait to ensure content is loaded
