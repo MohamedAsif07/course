@@ -143,33 +143,62 @@ def extract_coupon_code(driver, url):
 
 def get_udemy_link_with_coupon(driver):
     try:
-        # First try to find the APPLY HERE button with explicit wait
-        wait = WebDriverWait(driver, 10)
-        try:
-            apply_button = wait.until(
-                EC.presence_of_element_located((By.XPATH, '//a[contains(text(), "APPLY HERE")]')))
-            udemy_link = apply_button.get_attribute("href")
-            if udemy_link and 'udemy.com' in udemy_link:
-                print(f"Found Udemy link from APPLY HERE button: {udemy_link}")
-                return udemy_link
-        except:
-            print("❌ Could not find APPLY HERE button, trying alternatives...")
+        # List of possible selectors for the Udemy link
+        selectors = [
+            '//a[contains(text(), "APPLY HERE")]',
+            '//a[contains(@class, "wp-block-button__link")]',
+            '//a[contains(@class, "button")]',
+            '//a[contains(@href, "udemy.com")]',
+            '//a[contains(@class, "has-luminous-vivid-amber")]',
+            '//a[contains(@class, "elementor-button")]',
+            '//a[contains(@class, "btn")]',
+            '//a[contains(@class, "course-link")]',
+            '//a[contains(@class, "enroll-button")]',
+            '//a[contains(@class, "get-course")]'
+        ]
 
-        # Try alternative methods to find the link
-        try:
-            links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in links:
+        # Try each selector with explicit wait
+        wait = WebDriverWait(driver, 10)
+        for selector in selectors:
+            try:
+                element = wait.until(EC.presence_of_element_located((By.XPATH, selector)))
+                href = element.get_attribute("href")
+                if href and 'udemy.com' in href:
+                    print(f"✅ Found Udemy link using selector: {selector}")
+                    return href
+            except:
+                continue
+
+        # If no link found with selectors, try finding any Udemy link on the page
+        print("Trying to find any Udemy link on the page...")
+        links = driver.find_elements(By.TAG_NAME, 'a')
+        for link in links:
+            try:
                 href = link.get_attribute('href')
                 if href and 'udemy.com' in href:
-                    print(f"Found Udemy link from alternative method: {href}")
+                    print(f"✅ Found Udemy link from page links: {href}")
                     return href
-        except Exception as e:
-            print(f"❌ Could not find Udemy link: {e}")
+            except:
+                continue
+
+        # If still no link found, try JavaScript to find links
+        print("Trying JavaScript method to find Udemy links...")
+        js_script = """
+        return Array.from(document.getElementsByTagName('a'))
+            .map(a => a.href)
+            .filter(href => href && href.includes('udemy.com'));
+        """
+        udemy_links = driver.execute_script(js_script)
+        if udemy_links and len(udemy_links) > 0:
+            print(f"✅ Found Udemy link using JavaScript: {udemy_links[0]}")
+            return udemy_links[0]
+
+        print("❌ Could not find any Udemy link on the page")
+        return None
 
     except Exception as e:
-        print(f"Error in get_udemy_link_with_coupon: {e}")
-    
-    return None
+        print(f"❌ Error in get_udemy_link_with_coupon: {e}")
+        return None
 
 # Function to test Telegram connection
 async def test_telegram_connection():
