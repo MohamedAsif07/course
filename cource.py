@@ -219,7 +219,10 @@ def scrape_free_courses():
     # Initialize WebDriver - proper way to use Chrome driver
     try:
         print("Initializing Chrome WebDriver...")
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        driver.set_page_load_timeout(30)  # Set page load timeout
     except Exception as e:
         print(f"❌ WebDriver initialization failed: {e}")
         raise
@@ -231,8 +234,15 @@ def scrape_free_courses():
         # Open CourseJoiner "Free Udemy" page
         url = "https://www.coursejoiner.com/category/free-udemy/"
         print(f"Opening {url}...")
-        driver.get(url)
-        time.sleep(DELAY_SECONDS)
+        
+        try:
+            driver.get(url)
+            time.sleep(DELAY_SECONDS)
+        except Exception as e:
+            print(f"❌ Error accessing website: {e}")
+            error_message = f"⚠️ <b>Error accessing CourseJoiner</b>\n\nCould not access the website. Please try again later."
+            telegram_messages.append((error_message, None))
+            return
 
         # Get current date for reporting
         current_date = datetime.now().strftime("%Y-%m-%d")
@@ -241,81 +251,123 @@ def scrape_free_courses():
         summary_message = f"🔥 <b>FREE UDEMY COURSES</b> - {current_date} 🔥\n\n<i>Finding the latest free courses for you...</i>"
         telegram_messages.append((summary_message, None))
 
-        # Wait for the course blocks to load
-        wait = WebDriverWait(driver, 10)
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
+        try:
+            # Wait for the course blocks to load
+            wait = WebDriverWait(driver, 20)  # Increased timeout
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
+            
+            # Additional wait to ensure content is loaded
+            time.sleep(5)
 
-        # Find all course blocks
-        blocks = driver.find_elements(By.CLASS_NAME, "td-block-span6")
-        print(f"Found {len(blocks)} course blocks")
+            # Find all course blocks
+            blocks = driver.find_elements(By.CLASS_NAME, "td-block-span6")
+            print(f"Found {len(blocks)} course blocks")
 
-        # Store course info
-        course_titles = []
-        course_links = []
-        image_urls = []
+            if not blocks:
+                print("No course blocks found. Checking page source...")
+                print("Page title:", driver.title)
+                print("Current URL:", driver.current_url)
+                
+                # Try alternative selectors
+                blocks = driver.find_elements(By.CSS_SELECTOR, ".td-block-span6, .td_module_wrap")
+                print(f"Found {len(blocks)} blocks with alternative selector")
 
-        for block in blocks:
-            try:
-                # Get course title and link
-                title_element = block.find_element(By.CSS_SELECTOR, "h3.entry-title a")
-                title = title_element.text.strip()
-                link = title_element.get_attribute("href")
+            # Store course info
+            course_titles = []
+            course_links = []
+            image_urls = []
 
-                # Get course image
+            for block in blocks:
                 try:
-                    img_element = block.find_element(By.CSS_SELECTOR, "img.entry-thumb")
-                    img_url = img_element.get_attribute("src")
-                except:
+                    # Try multiple selectors for title and link
+                    title_element = None
+                    for selector in ["h3.entry-title a", "h3 a", ".entry-title a", "a"]:
+                        try:
+                            title_element = block.find_element(By.CSS_SELECTOR, selector)
+                            if title_element:
+                                break
+                        except:
+                            continue
+
+                    if not title_element:
+                        print("Could not find title element in block")
+                        continue
+
+                    title = title_element.text.strip()
+                    link = title_element.get_attribute("href")
+
+                    # Get course image
                     img_url = None
+                    for img_selector in ["img.entry-thumb", "img", ".entry-thumb"]:
+                        try:
+                            img_element = block.find_element(By.CSS_SELECTOR, img_selector)
+                            img_url = img_element.get_attribute("src")
+                            if img_url:
+                                break
+                        except:
+                            continue
 
-                if title and link:
-                    course_titles.append(title)
-                    course_links.append(link)
-                    image_urls.append(img_url)
-                    print(f"Found course: {title}")
-            except Exception as e:
-                print(f"Error processing a course block: {e}")
-                continue
+                    if title and link:
+                        course_titles.append(title)
+                        course_links.append(link)
+                        image_urls.append(img_url)
+                        print(f"Found course: {title}")
+                except Exception as e:
+                    print(f"Error processing a course block: {e}")
+                    continue
 
-        print(f"Found {len(course_titles)} courses in total")
+            print(f"Found {len(course_titles)} courses in total")
 
-        # Process each course
-        for i, (title, link, img_url) in enumerate(zip(course_titles, course_links, image_urls)):
-            try:
-                # Visit course page
-                driver.get(link)
-                time.sleep(DELAY_SECONDS)
+            if not course_titles:
+                print("No courses found. Sending error message...")
+                error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any courses at this time. Please try again later."
+                telegram_messages.append((error_message, None))
+                return
 
-                # Extract coupon code
-                coupon_code = extract_coupon_code(driver, link)
+            # Process each course
+            for i, (title, link, img_url) in enumerate(zip(course_titles, course_links, image_urls)):
+                try:
+                    # Visit course page
+                    driver.get(link)
+                    time.sleep(DELAY_SECONDS)
 
-                # Download image if available
-                image_path = None
-                if img_url and not is_data_url(img_url):
-                    try:
-                        response = requests.get(img_url)
-                        if response.status_code == 200:
-                            image_path = f"course_images/course_{i}.jpg"
-                            with open(image_path, 'wb') as f:
-                                f.write(response.content)
-                    except Exception as e:
-                        print(f"Error downloading image: {e}")
-                        image_path = DEFAULT_IMAGE_PATH
+                    # Extract coupon code
+                    coupon_code = extract_coupon_code(driver, link)
 
-                # Format message
-                message = f"🎓 <b>{title}</b>\n\n"
-                if coupon_code:
-                    message += f"🎟️ Coupon Code: <code>{coupon_code}</code>\n\n"
-                message += f"🔗 <a href='{link}'>Get Course</a>"
+                    # Download image if available
+                    image_path = None
+                    if img_url and not is_data_url(img_url):
+                        try:
+                            response = requests.get(img_url, timeout=10)
+                            if response.status_code == 200:
+                                image_path = f"course_images/course_{i}.jpg"
+                                with open(image_path, 'wb') as f:
+                                    f.write(response.content)
+                        except Exception as e:
+                            print(f"Error downloading image: {e}")
+                            image_path = DEFAULT_IMAGE_PATH
 
-                telegram_messages.append((message, image_path))
+                    # Format message
+                    message = f"🎓 <b>{title}</b>\n\n"
+                    if coupon_code:
+                        message += f"🎟️ Coupon Code: <code>{coupon_code}</code>\n\n"
+                    message += f"🔗 <a href='{link}'>Get Course</a>"
 
-            except Exception as e:
-                print(f"Error processing course {title}: {e}")
-                continue
+                    telegram_messages.append((message, image_path))
+
+                except Exception as e:
+                    print(f"Error processing course {title}: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"❌ Error during scraping: {e}")
+            error_message = f"⚠️ <b>Error During Scraping</b>\n\nAn error occurred while scraping courses. Please try again later."
+            telegram_messages.append((error_message, None))
 
     except Exception as e:
         print(f"❌ Error during scraping: {e}")
+        error_message = f"⚠️ <b>Unexpected Error</b>\n\nAn unexpected error occurred. Please try again later."
+        telegram_messages.append((error_message, None))
     finally:
         driver.quit()
         print("Browser closed.")
