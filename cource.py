@@ -241,155 +241,90 @@ def scrape_free_courses():
         summary_message = f"🔥 <b>FREE UDEMY COURSES</b> - {current_date} 🔥\n\n<i>Finding the latest free courses for you...</i>"
         telegram_messages.append((summary_message, None))
 
+        # Wait for the course blocks to load
+        wait = WebDriverWait(driver, 10)
+        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
+
         # Find all course blocks
         blocks = driver.find_elements(By.CLASS_NAME, "td-block-span6")
+        print(f"Found {len(blocks)} course blocks")
 
         # Store course info
         course_titles = []
         course_links = []
         image_urls = []
 
-        # Extract initial course information
-        print("Extracting course information...")
         for block in blocks:
             try:
-                title = block.find_element(By.TAG_NAME, "h3").text
-                link = block.find_element(By.TAG_NAME, "a").get_attribute("href")
+                # Get course title and link
+                title_element = block.find_element(By.CSS_SELECTOR, "h3.entry-title a")
+                title = title_element.text.strip()
+                link = title_element.get_attribute("href")
 
-                # Get image URL
-                img = block.find_element(By.CLASS_NAME, "entry-thumb")
-                img_url = img.get_attribute("src")
+                # Get course image
+                try:
+                    img_element = block.find_element(By.CSS_SELECTOR, "img.entry-thumb")
+                    img_url = img_element.get_attribute("src")
+                except:
+                    img_url = None
 
-                course_titles.append(title)
-                course_links.append(link)
-                image_urls.append(img_url)
-
+                if title and link:
+                    course_titles.append(title)
+                    course_links.append(link)
+                    image_urls.append(img_url)
+                    print(f"Found course: {title}")
             except Exception as e:
-                print(f"Error extracting course info: {e}")
+                print(f"Error processing a course block: {e}")
                 continue
 
-        total_courses = len(course_titles)
-        print(f"Found {total_courses} courses in total")
+        print(f"Found {len(course_titles)} courses in total")
 
-        # Process each course - limit to first 10 for testing
-        successful_courses = 0
-        max_courses = min(10, total_courses)  # Process at most 10 courses for initial test
-
-        for i, (title, course_url, img_url) in enumerate(
-                zip(course_titles[:max_courses], course_links[:max_courses], image_urls[:max_courses])):
+        # Process each course
+        for i, (title, link, img_url) in enumerate(zip(course_titles, course_links, image_urls)):
             try:
-                print(f"\nProcessing course {i + 1}/{max_courses}: {title}")
-
-                # Format title for filename
-                safe_title = ''.join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in title)
-                safe_title = safe_title[:50]
-
-                # Image path for local saving and Telegram
-                img_path = None
-
-                # Handle image download
-                if SAVE_IMAGES_LOCALLY:
-                    img_path = f"course_images/{i + 1}_{safe_title}.jpg"
-
-                    # Check if image URL is a data URL
-                    if is_data_url(img_url):
-                        print(f"⚠️ Skipping data URL image, using default instead")
-                        img_path = DEFAULT_IMAGE_PATH
-                    else:
-                        # Download the image
-                        try:
-                            response = requests.get(img_url, timeout=10)
-                            if response.status_code == 200:
-                                with open(img_path, 'wb') as f:
-                                    f.write(response.content)
-                                print(f"✅ Image saved to {img_path}")
-                            else:
-                                print(f"❌ Failed to download image (Status code: {response.status_code})")
-                                img_path = DEFAULT_IMAGE_PATH
-                        except Exception as e:
-                            print(f"❌ Error downloading image: {e}")
-                            img_path = DEFAULT_IMAGE_PATH
-
-                # Visit course page to get Udemy link and possible coupon
-                driver.get(course_url)
+                # Visit course page
+                driver.get(link)
                 time.sleep(DELAY_SECONDS)
 
-                # Find "APPLY HERE" button and extract the Udemy link
-                udemy_link = None
-                try:
-                    wait = WebDriverWait(driver, 10)
-                    apply_button = wait.until(
-                        EC.presence_of_element_located((By.XPATH, '//a[contains(text(), "APPLY HERE")]')))
-                    udemy_link = apply_button.get_attribute("href")
-                except:
-                    print("❌ Could not find APPLY HERE button, trying alternatives...")
-                    # Try alternative methods to find the link
-                    try:
-                        links = driver.find_elements(By.TAG_NAME, 'a')
-                        for link in links:
-                            href = link.get_attribute('href')
-                            if href and 'udemy.com' in href:
-                                udemy_link = href
-                                break
-                        else:
-                            raise Exception("No Udemy link found")
-                    except Exception as e:
-                        print(f"❌ Could not find Udemy link: {e}")
-                        continue
-
                 # Extract coupon code
-                coupon_code = extract_coupon_code(driver, udemy_link)
-                coupon_text = f"🎟️ <b>Coupon Code:</b> <code>{coupon_code}</code>\n" if coupon_code else ""
+                coupon_code = extract_coupon_code(driver, link)
 
-                # Get course description
-                description = ""
-                try:
-                    desc_elements = driver.find_elements(By.CSS_SELECTOR, ".td-post-content p")
-                    for i, p in enumerate(desc_elements):
-                        if i < 3:  # Only get first 3 paragraphs
-                            text = p.text.strip()
-                            if text and len(text) > 20:  # Only meaningful paragraphs
-                                description = text
-                                break
-                except:
-                    pass
+                # Download image if available
+                image_path = None
+                if img_url and not is_data_url(img_url):
+                    try:
+                        response = requests.get(img_url)
+                        if response.status_code == 200:
+                            image_path = f"course_images/course_{i}.jpg"
+                            with open(image_path, 'wb') as f:
+                                f.write(response.content)
+                    except Exception as e:
+                        print(f"Error downloading image: {e}")
+                        image_path = DEFAULT_IMAGE_PATH
 
-                # Format description
-                if description:
-                    # Trim to reasonable length
-                    if len(description) > 200:
-                        description = description[:197] + "..."
-                    description = f"📝 <i>{description}</i>\n\n"
+                # Format message
+                message = f"🎓 <b>{title}</b>\n\n"
+                if coupon_code:
+                    message += f"🎟️ Coupon Code: <code>{coupon_code}</code>\n\n"
+                message += f"🔗 <a href='{link}'>Get Course</a>"
 
-                # Format message for Telegram
-                message = (
-                    f"🔥 <b>{title}</b>\n\n"
-                    f"{description}"
-                    f"🌐 <a href='{udemy_link}'>Enroll Now (Free)</a>\n"
-                    f"{coupon_text}"
-                    f"📢 Share with friends who want to learn!\n\n"
-                    f"#FreeCourse #Udemy #OnlineLearning"
-                )
-
-                # Add to queue for sending
-                telegram_messages.append((message, img_path))
-                successful_courses += 1
-
-                print(f"✅ Course processed successfully")
+                telegram_messages.append((message, image_path))
 
             except Exception as e:
-                print(f"❌ Error processing course: {e}")
+                print(f"Error processing course {title}: {e}")
+                continue
 
-        # Final summary message
-        summary = f"✅ <b>Today's Free Courses Update</b>\n\nJust shared {successful_courses} free Udemy courses! Grab them while they last.\n\n#FreeUdemy #CourseUpdate"
-        telegram_messages.append((summary, None))
-
-        return telegram_messages
-
+    except Exception as e:
+        print(f"❌ Error during scraping: {e}")
     finally:
-        # Clean up
         driver.quit()
         print("Browser closed.")
+
+    # Send messages to Telegram
+    if telegram_messages:
+        asyncio.run(run_telegram_operations(telegram_messages))
+    else:
+        print("No courses found to send.")
 
 # Helper function to extract chat ID from URL or handle
 def get_chat_id():
@@ -439,12 +374,4 @@ if __name__ == "__main__":
     TELEGRAM_CHAT_ID = get_chat_id()
 
     # Run the scraper
-    telegram_queue = scrape_free_courses()
-
-    # Send all messages to Telegram
-    if telegram_queue:
-        print(f"\nSending {len(telegram_queue)} messages to Telegram group...")
-        asyncio.run(run_telegram_operations(telegram_queue))
-        print("✅ Done sending messages to Telegram group!")
-    else:
-        print("No messages to send to Telegram.")
+    scrape_free_courses()
