@@ -405,8 +405,18 @@ def scrape_free_courses():
         summary_message = f"🔥 <b>FREE UDEMY COURSES</b> - {current_date} 🔥\n\n<i>Finding the latest free courses for you...</i>"
         telegram_messages.append((summary_message, None))
 
+        # Wait for content to load
+        wait = WebDriverWait(driver, 10)
+        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "td-block-span6")))
+        time.sleep(2)  # Additional small wait to ensure content is fully loaded
+
         # Find all course blocks with optimized selectors
-        blocks = driver.find_elements(By.CSS_SELECTOR, ".td-block-span6, .td_module_wrap")
+        print("Looking for course blocks...")
+        blocks = driver.find_elements(By.CSS_SELECTOR, ".td-block-span6")
+        if not blocks:
+            print("Trying alternative selector...")
+            blocks = driver.find_elements(By.CSS_SELECTOR, ".td_module_wrap")
+        
         print(f"Found {len(blocks)} course blocks")
 
         if not blocks:
@@ -418,21 +428,55 @@ def scrape_free_courses():
         course_data = []
         for i, block in enumerate(blocks):
             try:
-                title_element = block.find_element(By.CSS_SELECTOR, "h3.entry-title a, h3 a, .entry-title a, a")
+                # Try multiple selectors for title and link
+                title_element = None
+                for selector in ["h3.entry-title a", "h3 a", ".entry-title a", "a"]:
+                    try:
+                        elements = block.find_elements(By.CSS_SELECTOR, selector)
+                        if elements:
+                            title_element = elements[0]
+                            break
+                    except:
+                        continue
+
+                if not title_element:
+                    print(f"Could not find title element in block {i}")
+                    continue
+
                 title = title_element.text.strip()
+                if not title:
+                    print(f"Empty title in block {i}")
+                    continue
+
                 link = title_element.get_attribute("href")
-                
-                img_element = block.find_element(By.CSS_SELECTOR, "img.entry-thumb, img, .entry-thumb")
-                img_url = img_element.get_attribute("src")
+                if not link:
+                    print(f"No link found for course: {title}")
+                    continue
+
+                # Get course image
+                img_url = None
+                for img_selector in ["img.entry-thumb", "img", ".entry-thumb"]:
+                    try:
+                        img_elements = block.find_elements(By.CSS_SELECTOR, img_selector)
+                        if img_elements:
+                            img_url = img_elements[0].get_attribute("src")
+                            break
+                    except:
+                        continue
 
                 if title and link:
                     course_data.append((title, link, img_url, i))
-                    print(f"Found course: {title}")
+                    print(f"✅ Found course {i+1}: {title}")
             except Exception as e:
-                print(f"Error processing a course block: {e}")
+                print(f"❌ Error processing block {i}: {e}")
                 continue
 
-        print(f"Found {len(course_data)} courses in total")
+        print(f"Successfully extracted {len(course_data)} courses")
+
+        if not course_data:
+            error_message = f"⚠️ <b>No Courses Found</b>\n\nCould not find any valid courses at this time. Please try again later."
+            telegram_messages.append((error_message, None))
+            return
 
         # Process courses in parallel
         successful_courses = 0
