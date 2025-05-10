@@ -15,8 +15,8 @@ This project automatically scrapes free Udemy courses from CourseJoiner.com and 
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo-url>
-   cd <repo-name>
+   git clone https://github.com/MohamedAsif07/course.git
+   cd course
    ```
 
 2. **Install dependencies**
